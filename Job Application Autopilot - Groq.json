@@ -1,0 +1,471 @@
+{
+  "name": "Job Application Autopilot - Groq",
+  "nodes": [
+    {
+      "parameters": {
+        "formTitle": "    Job Application Assistant",
+        "formDescription": "JobPilot AI simplifies your job application process by analyzing your CV, evaluating job fit, generating a personalized cover letter, tracking your application, and scheduling follow-ups automatically.",
+        "formFields": {
+          "values": [
+            {
+              "fieldLabel": "Applicant Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Applicant Email",
+              "fieldType": "email",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Job Title",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Company Name",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "Job Description",
+              "fieldType": "textarea",
+              "requiredField": true
+            },
+            {
+              "fieldLabel": "CV / Resume Text",
+              "fieldType": "textarea",
+              "requiredField": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "986db529-38f4-4829-9ea5-35982e0f5f97",
+      "name": "Application Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "typeVersion": 2.2,
+      "position": [
+        -1136,
+        192
+      ],
+      "webhookId": "a7bb670a-91a5-4169-8463-bad1072cb239"
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $json;\n\nconst applicantName = data[\"Applicant Name\"] || \"\";\nconst applicantEmail = data[\"Applicant Email\"] || \"\";\nconst jobTitle = data[\"Job Title\"] || \"\";\nconst companyName = data[\"Company Name\"] || \"\";\nconst jobDescription = data[\"Job Description\"] || \"\";\nconst cvText = data[\"CV / Resume Text\"] || \"\";\n\nconst prompt = `You are an expert recruitment assistant.\n\nEvaluate the candidate against the job description and generate a personalized cover letter.\n\nCandidate name: ${applicantName}\nJob title: ${jobTitle}\nCompany: ${companyName}\n\nJOB DESCRIPTION:\n${jobDescription}\n\nCV / RESUME:\n${cvText}\n\nReturn ONLY valid JSON in this exact structure:\n{\n  \"fit_score\": 0,\n  \"reasoning\": \"short explanation of why the candidate fits or does not fit\",\n  \"strengths\": [\"strength 1\", \"strength 2\", \"strength 3\"],\n  \"gaps\": [\"gap 1\", \"gap 2\"],\n  \"cover_letter\": \"professional personalized cover letter\"\n}\n\nRules:\n- fit_score must be an integer from 0 to 100.\n- Base the score only on the supplied CV and job description.\n- Do not invent qualifications, experience, employers, degrees, or achievements.\n- The cover letter should be concise, professional, and personalized to the company and role.\n- Do not use markdown fences around the JSON.`;\n\nreturn [{\n  json: {\n    applicantName,\n    applicantEmail,\n    jobTitle,\n    companyName,\n    jobDescription,\n    cvText,\n    prompt,\n    submittedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "3811b107-9295-47fd-810f-a7b1ca442c52",
+      "name": "Prepare AI Request",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -912,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.groq.com/openai/v1/chat/completions",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{\n{\n  model: \"openai/gpt-oss-20b\",\n  temperature: 0.2,\n  response_format: {\n    type: \"json_object\"\n  },\n  messages: [\n    {\n      role: \"system\",\n      content: \"You are an expert recruitment assistant. Always return valid JSON only.\"\n    },\n    {\n      role: \"user\",\n      content: `Evaluate this job application.\n\nCandidate Name:\n${$json.applicantName}\n\nJob Title:\n${$json.jobTitle}\n\nCompany:\n${$json.companyName}\n\nJOB DESCRIPTION:\n${$json.jobDescription}\n\nCV / RESUME:\n${$json.cvText}\n\nReturn ONLY valid JSON using this structure:\n\n{\n  \"fit_score\": 0,\n  \"reasoning\": \"\",\n  \"strengths\": [],\n  \"gaps\": [],\n  \"cover_letter\": \"\"\n}\n\nRules:\n- fit_score must be an integer between 0 and 100.\n- Compare only the supplied CV and job description.\n- Do not invent qualifications or experience.\n- Generate a professional personalized cover letter.\n- Return JSON only.`\n    }\n  ]\n}\n}}",
+        "options": {}
+      },
+      "id": "f810a0b2-4157-42e7-b11f-566dc8f4c6bf",
+      "name": "Groq AI",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -688,
+        192
+      ],
+      "credentials": {
+        "httpBearerAuth": {
+          "id": "8Cfn3vEZSdbxjcuL",
+          "name": "Bearer Auth account"
+        }
+      },
+      "continueOnFail": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const input = $input.first().json;\nconst original = $('Prepare AI Request').first().json;\n\nlet raw = \"\";\nlet success = true;\nlet errorMessage = \"\";\n\nif (input.error) {\n  success = false;\n  errorMessage = input.error.message || JSON.stringify(input.error);\n} else {\n  raw = input.choices?.[0]?.message?.content || input.body?.choices?.[0]?.message?.content || \"\";\n  if (!raw) {\n    success = false;\n    errorMessage = \"Groq returned an empty response.\";\n  }\n}\n\nlet ai = {};\nif (success) {\n  try {\n    ai = typeof raw === \"string\" ? JSON.parse(raw) : raw;\n  } catch (e) {\n    success = false;\n    errorMessage = \"Could not parse Groq JSON response: \" + e.message;\n  }\n}\n\nconst score = Number(ai.fit_score);\nif (success && (!Number.isInteger(score) || score < 0 || score > 100)) {\n  success = false;\n  errorMessage = \"Groq returned an invalid fit score.\";\n}\n\nreturn [{\n  json: {\n    success,\n    errorMessage,\n    applicantName: original.applicantName,\n    applicantEmail: original.applicantEmail,\n    jobTitle: original.jobTitle,\n    companyName: original.companyName,\n    submittedAt: original.submittedAt,\n    fitScore: success ? score : \"\",\n    reasoning: success ? (ai.reasoning || \"\") : \"\",\n    strengths: success ? (ai.strengths || []).join(\", \") : \"\",\n    gaps: success ? (ai.gaps || []).join(\", \") : \"\",\n    coverLetter: success ? (ai.cover_letter || \"\") : \"\"\n  }\n}];"
+      },
+      "id": "e8e1f72e-af04-4eeb-8240-bb60f381930b",
+      "name": "Parse AI Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -448,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "id": "54520633-308c-4e35-b6ae-056480433387",
+              "leftValue": "={{ $json.success }}",
+              "rightValue": true,
+              "operator": {
+                "type": "boolean",
+                "operation": "equals"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "13b3f486-6b95-407a-b607-03d24fb47b49",
+      "name": "AI Success?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        -224,
+        192
+      ]
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.applicantEmail }}",
+        "subject": "Your personalized cover letter - {{ $json.jobTitle }} at {{ $json.companyName }}",
+        "message": "=Hello {{ $json.applicantName }},<br><br>Your Job Application Autopilot result is ready.<br><br><b>Fit Score:</b> {{ $json.fitScore }}/100<br><b>Reasoning:</b> {{ $json.reasoning }}<br><br><b>Personalized Cover Letter</b><br><br>{{ $json.coverLetter.replace(/\\n/g, '<br>') }}<br><br>Good luck with your application!<br><br>Job Application Autopilot",
+        "options": {}
+      },
+      "id": "43f0411a-ff2d-4ba4-89a2-6fdf095ec87d",
+      "name": "Email Cover Letter",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        0
+      ],
+      "webhookId": "9cc2a8c7-dba1-46cb-947c-d34558b7749e",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "APBbNTYeT1EuVIMh",
+          "name": "Gmail account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "1m977yiLplzU1JCkEuXOJKZiSIWySJwvU9bQFGlLAAvs",
+          "mode": "list",
+          "cachedResultName": "job application n8n",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1m977yiLplzU1JCkEuXOJKZiSIWySJwvU9bQFGlLAAvs/edit?usp=drivesdk"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "gid=0",
+          "mode": "list",
+          "cachedResultName": "Sheet1",
+          "cachedResultUrl": "https://docs.google.com/spreadsheets/d/1m977yiLplzU1JCkEuXOJKZiSIWySJwvU9bQFGlLAAvs/edit#gid=0"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Applicant Name": "={{ $json.applicantName }}",
+            "Submitted At": "={{ $json.submittedAt }}",
+            "Applicant Email": "={{ $json.applicantEmail }}",
+            "Job Title": "={{ $json.jobTitle }}",
+            "Company": "={{ $json.companyName }}",
+            "Fit Score": "={{ $json.fitScore }}",
+            "Reasoning": "={{ $json.reasoning }}",
+            "Strengths": "={{ $json.strengths }}",
+            "Gaps": "={{ $json.gaps }}",
+            "Cover Letter": "={{ $json.coverLetter }}"
+          },
+          "matchingColumns": [],
+          "schema": [
+            {
+              "id": "Submitted At",
+              "displayName": "Submitted At",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Applicant Name",
+              "displayName": "Applicant Name",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Applicant Email",
+              "displayName": "Applicant Email",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Job Title",
+              "displayName": "Job Title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Company",
+              "displayName": "Company",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Fit Score",
+              "displayName": "Fit Score",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Reasoning",
+              "displayName": "Reasoning",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Strengths",
+              "displayName": "Strengths",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Gaps",
+              "displayName": "Gaps",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "Cover Letter",
+              "displayName": "Cover Letter",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "id": "8132dc93-f3d2-45ba-a0d8-a754ce182e9d",
+      "name": "Log to Google Sheets",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        0,
+        208
+      ],
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "7VgiYo6HZGb3Mp3G",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "calendar": {
+          "__rl": true,
+          "mode": "list",
+          "value": "primary"
+        },
+        "start": "={{ new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString() }}",
+        "end": "={{ new Date(Date.now() + 7 * 24 * 60 * 60 * 1000 + 30 * 60 * 1000).toISOString() }}",
+        "additionalFields": {}
+      },
+      "id": "a1e76fc6-d3b0-43a2-bac7-87566aeb22e8",
+      "name": "7-Day Follow-up Reminder",
+      "type": "n8n-nodes-base.googleCalendar",
+      "typeVersion": 1.3,
+      "position": [
+        240,
+        208
+      ],
+      "credentials": {
+        "googleCalendarOAuth2Api": {
+          "id": "2FDwL9sD0N26nlnN",
+          "name": "Google Calendar account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "sendTo": "={{ $json.applicantEmail }}",
+        "subject": "Job Application Autopilot - AI service failed",
+        "message": "=Hello {{ $json.applicantName }},<br><br>We received your application for <b>{{ $json.jobTitle }}</b> at <b>{{ $json.companyName }}</b>, but the AI evaluation could not be completed automatically.<br><br>Error: {{ $json.errorMessage }}<br><br>Please retry the form later. Your application details were received by the workflow.",
+        "options": {}
+      },
+      "id": "0f98cb64-6e51-427d-b527-aac10db8497a",
+      "name": "Fallback Email",
+      "type": "n8n-nodes-base.gmail",
+      "typeVersion": 2.1,
+      "position": [
+        0,
+        432
+      ],
+      "webhookId": "c5d918ce-78e4-4a15-93f0-72e4bcc9378e",
+      "credentials": {
+        "gmailOAuth2": {
+          "id": "APBbNTYeT1EuVIMh",
+          "name": "Gmail account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Application Form": {
+      "main": [
+        [
+          {
+            "node": "Prepare AI Request",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare AI Request": {
+      "main": [
+        [
+          {
+            "node": "Groq AI",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Groq AI": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Result": {
+      "main": [
+        [
+          {
+            "node": "AI Success?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Success?": {
+      "main": [
+        [
+          {
+            "node": "Email Cover Letter",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Log to Google Sheets",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fallback Email",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Email Cover Letter": {
+      "main": [
+        [
+          {
+            "node": "7-Day Follow-up Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log to Google Sheets": {
+      "main": [
+        [
+          {
+            "node": "7-Day Follow-up Reminder",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "availableInMCP": false
+  },
+  "versionId": "caa67f26-d3d2-4c30-acb4-9cd536f8f0dc",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "d6f5002e41ffbbf97a857229d26bff3f4d285b3e9d0ca48c6ae48e71be6b913d"
+  },
+  "nodeGroups": [],
+  "id": "rgUVa94if0X7KS9l",
+  "tags": []
+}
